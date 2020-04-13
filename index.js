@@ -2,9 +2,11 @@ const request = require('request-promise');
 const fs = require('fs');
 
 const url = 'https://preciosmaximos.argentina.gob.ar/api/products?pag=1&Provincia=Buenos%20Aires&regs=';
-const registros = 2050;
+const registros = 10;
 const preciosMaximosFileName = '/productosPreciosMaximos.json';
 const fechaUltimoGetFileName = '/timestampUltimoGet.txt';
+
+const superdia = require('./dia');
 
 let fechaUltimoGet;
 
@@ -57,20 +59,6 @@ async function getProductosPreciosMaximos() {
     }
 }
 
-const urlDIA = 'https://diaonline.supermercadosdia.com.ar/api/catalog_system/pub/products/search?fq=alternateIds_Ean:%EAN%&_from=0&_to=3';
-async function getProductoDeDia(ean) {
-    const URL = urlDIA.replace('%EAN%', ean);
-    return await request.get(URL, { json: true })
-}
-
-function getPrecio(productoDIA) {
-    try {
-        return productoDIA[0].items[0].sellers[0].commertialOffer.Price
-    } catch (error) {
-        return undefined;
-    }
-}
-
 function chunkArray(array, chunk_size) {
     var results = [];
 
@@ -81,8 +69,24 @@ function chunkArray(array, chunk_size) {
     return results;
 }
 
+function collect(precio, prod, productosQueNoCumplen, productosQueNoEstan, productosQueCumplen) {
+    const cumple = precio && parseInt(precio) <= parseInt(prod['Precio sugerido']);
+    if (!cumple && precio !== undefined) {
+        console.log("El producto ", prod.Producto, "No Cumple. \n Precio Maximo: ", prod['Precio sugerido'], "\nPrecio en DIA: ", precio);
+        productosQueNoCumplen.push(prod);
+    }
+    else if (precio === undefined) {
+        productosQueNoEstan.push(prod);
+    }
+    else {
+        productosQueCumplen.push(prod);
+    }
+}
+
 (async () => {
     let prodPrecMax = await getProductosPreciosMaximos();
+    const totalProductosPreciosMax = prodPrecMax.result.length;
+
     if (prodPrecMax.result) {
         let productosQueNoCumplen = [];
         let productosQueCumplen = [];
@@ -94,22 +98,10 @@ function chunkArray(array, chunk_size) {
             let arrayPromise = [];
             for (const prod of chunk) {
                 const ean = prod.id_producto;
-                let promise = getProductoDeDia(ean).then((prodDia) => {
-                    let precioDia = getPrecio(prodDia);
-                    const cumple = precioDia && parseInt(precioDia) <= parseInt(prod['Precio sugerido']);
-                    if (!cumple && precioDia !== undefined) {
-                        console.log(
-                            "El producto ", prod.Producto,
-                            "No Cumple. \n Precio Maximo: ", prod['Precio sugerido'],
-                            "\nPrecio en DIA: ", precioDia);
-                        productosQueNoCumplen.push(prod);
-                    } else if (precioDia === undefined) {
-                        productosQueNoEstan.push(prod);
-                    } else {
-                        productosQueCumplen.push(prod);
-                    }
+                let promise = superdia.getProducto(ean).then((precio) => {
+                    collect(precio, prod, productosQueNoCumplen, productosQueNoEstan, productosQueCumplen);
                 }).catch((err) => {
-                    console.log("Problemas llamando al servicio de DIA", err.message);
+                    console.log("Problemas llamando al servicio del Super DIA", err.message);
                 });
                 arrayPromise.push(promise)
             }
@@ -122,7 +114,8 @@ function chunkArray(array, chunk_size) {
         console.log("Cantidad de productos que NO cumplen: ", productosQueNoCumplen.length);
         console.dir("Productos que NO cumplen ", productosQueNoCumplen);
 
-        console.log("Total productos en precios Maximos", prodPrecMax.result.length);
+        console.log("Total productos en precios Maximos", totalProductosPreciosMax);
 
     }
 })();
+
